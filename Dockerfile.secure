@@ -1,7 +1,7 @@
 # Argument for setting the build image
 ARG BUILD_IMAGE=golang:1.25.5
 # Argument for setting the runtime image
-ARG RUNTIME_IMAGE=gcr.io/distroless/static
+ARG RUNTIME_IMAGE=alpine:3.23.2
 # Argument for setting the oauth2-proxy build version
 ARG VERSION
 # Hardcode platform to avoid linter warnings while ensuring amd64
@@ -44,9 +44,17 @@ FROM --platform=${PLATFORM} ${RUNTIME_IMAGE}
 
 ARG VERSION
 
+# Install CA certificates and create a non-root user
+RUN apk add --no-cache ca-certificates && \
+    addgroup -S -g 2000 oauth2-proxy && \
+    adduser -S -u 2000 -G oauth2-proxy oauth2-proxy
+
 # Copy the binary and the empty key file from the builder stage
 COPY --from=builder /go/src/github.com/oauth2-proxy/oauth2-proxy/oauth2-proxy /bin/oauth2-proxy
 COPY --from=builder /go/src/github.com/oauth2-proxy/oauth2-proxy/jwt_signing_key.pem /etc/ssl/private/jwt_signing_key.pem
+
+# Ensure correct permissions for the key file
+RUN chown oauth2-proxy:oauth2-proxy /etc/ssl/private/jwt_signing_key.pem
 
 # Metadata labels
 LABEL org.opencontainers.image.licenses="MIT" \
@@ -57,7 +65,7 @@ LABEL org.opencontainers.image.licenses="MIT" \
     org.opencontainers.image.title="oauth2-proxy" \
     org.opencontainers.image.version=${VERSION}
 
-# Use the nonroot user provided by the distroless image (UID 65532)
-USER 65532:65532
+# Use the non-root user (UID 2000)
+USER 2000:2000
 
 ENTRYPOINT ["/bin/oauth2-proxy"]
