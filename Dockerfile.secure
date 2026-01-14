@@ -1,0 +1,63 @@
+# Argument for setting the build image
+ARG BUILD_IMAGE=golang:1.25.5
+# Argument for setting the runtime image
+ARG RUNTIME_IMAGE=gcr.io/distroless/static
+# Argument for setting the oauth2-proxy build version
+ARG VERSION
+# Hardcode platform to avoid linter warnings while ensuring amd64
+ARG PLATFORM=linux/amd64
+
+###############################################################################
+# BUILDER
+###############################################################################
+FROM --platform=${PLATFORM} ${BUILD_IMAGE} AS builder
+
+# Set the working directory
+WORKDIR /go/src/github.com/oauth2-proxy/oauth2-proxy
+
+# Build argument for the source version
+ARG OAUTH2_PROXY_VERSION=v7.13.0
+
+# Clone the specified release tag instead of using local source
+RUN git clone --depth 1 --branch ${OAUTH2_PROXY_VERSION} https://github.com/oauth2-proxy/oauth2-proxy.git .
+
+# Update vulnerable dependencies and tidy the module file
+# Forces golang.org/x/crypto to v0.47.0 as requested to solve CVEs
+RUN go get golang.org/x/crypto@v0.47.0 && \
+    go mod tidy
+
+# Download dependencies
+RUN go mod download
+
+# Build arguments for cross-compilation
+ARG VERSION=${OAUTH2_PROXY_VERSION}
+
+# Build binary and create an empty key file.
+RUN printf "Building OAuth2 Proxy for arch amd64\n" && \
+    CGO_ENABLED=0 GOARCH=amd64 VERSION=${VERSION} make build && \
+    touch jwt_signing_key.pem
+
+###############################################################################
+# RUNTIME
+###############################################################################
+FROM --platform=${PLATFORM} ${RUNTIME_IMAGE}
+
+ARG VERSION
+
+# Copy the binary and the empty key file from the builder stage
+COPY --from=builder /go/src/github.com/oauth2-proxy/oauth2-proxy/oauth2-proxy /bin/oauth2-proxy
+COPY --from=builder /go/src/github.com/oauth2-proxy/oauth2-proxy/jwt_signing_key.pem /etc/ssl/private/jwt_signing_key.pem
+
+# Metadata labels
+LABEL org.opencontainers.image.licenses="MIT" \
+    org.opencontainers.image.description="Secure build of oauth2-proxy with patched dependencies (golang.org/x/crypto v0.47.0)" \
+    org.opencontainers.image.documentation="https://oauth2-proxy.github.io/oauth2-proxy/" \
+    org.opencontainers.image.source="https://github.com/oauth2-proxy/oauth2-proxy" \
+    org.opencontainers.image.url="https://quay.io/oauth2-proxy/oauth2-proxy" \
+    org.opencontainers.image.title="oauth2-proxy" \
+    org.opencontainers.image.version=${VERSION}
+
+# Use the nonroot user provided by the distroless image (UID 65532)
+USER 65532:65532
+
+ENTRYPOINT ["/bin/oauth2-proxy"]
